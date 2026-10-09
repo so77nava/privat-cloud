@@ -22,8 +22,15 @@ Eine schlanke, selbst hostbare Dateiverwaltung für den privaten Gebrauch: Datei
 docker compose up -d --build
 ```
 
-Danach öffnest du <http://localhost:3000>. Beim ersten Aufruf legst du dein Passwort fest.
+Danach öffnest du <http://localhost:3000>. Beim ersten Aufruf legst du dein Passwort fest. Dafür brauchst du den **Einrichtungscode**, den der Server beim Start ins Log schreibt:
+
+```bash
+docker compose logs privat-cloud
+```
+
 Die Daten (Datenbank und Dateien) liegen im Docker-Volume `privat-cloud-data`.
+
+**Von unterwegs und auf allen Geräten erreichbar machen:** siehe [docs/hosting.md](docs/hosting.md). Dort sind Cloudflare Tunnel und Tailscale Funnel beschrieben, beide mit HTTPS und ohne Portfreigabe.
 
 ### Variante B: Lokal mit Node.js (≥ 20.19)
 
@@ -35,6 +42,7 @@ npm run dev
 - Frontend (Vite mit Hot Reload): <http://localhost:5173>
 - Backend-API: <http://localhost:3000>; Vite leitet `/api` dorthin weiter
 - Daten liegen in `backend/data/`
+- Den Einrichtungscode für den ersten Aufruf zeigt das Terminal an
 
 Für den Produktivbetrieb ohne Docker:
 
@@ -45,13 +53,14 @@ npm start          # Backend liefert API und Frontend auf Port 3000 aus
 
 ## Konfiguration
 
-Alle Einstellungen laufen über Umgebungsvariablen. Lokal kopierst du dafür `backend/.env.example` nach `backend/.env`, bei Docker setzt du sie in `docker-compose.yml` oder in einer `.env` neben der Compose-Datei. Alle Werte sind optional.
+Alle Einstellungen laufen über Umgebungsvariablen. Lokal kopierst du dafür `backend/.env.example` nach `backend/.env`. Bei Docker kopierst du `.env.example` nach `.env` neben der `docker-compose.yml`. Alle Werte sind optional.
 
 | Variable | Standard | Beschreibung |
 |---|---|---|
 | `PORT` | `3000` | Port des Servers |
 | `DATA_DIR` | `./data` (Docker: `/data`) | Datenbank und Dateien |
 | `JWT_SECRET` | automatisch | Mind. 32 Zeichen. Ist der Wert leer, wird ein Secret erzeugt und in `DATA_DIR/.jwt-secret` gespeichert |
+| `SETUP_CODE` | zufällig | Einrichtungscode für den ersten Aufruf. Ist der Wert leer, wird beim Start ein Code erzeugt und ins Log geschrieben |
 | `ACCESS_TOKEN_TTL_MINUTES` | `15` | Lebensdauer des Access Tokens |
 | `REFRESH_TOKEN_TTL_DAYS` | `30` | Wie lange du angemeldet bleibst |
 | `MAX_FILE_SIZE_MB` | `100` | Maximale Dateigröße |
@@ -63,7 +72,7 @@ Alle Einstellungen laufen über Umgebungsvariablen. Lokal kopierst du dafür `ba
 
 ## Sicherheit
 
-- **Ein Konto, nur Passwort:** Die Instanz ist für eine Person gedacht. Das Konto wird beim ersten Aufruf angelegt, danach ist keine Registrierung mehr möglich. Das Passwort wird mit bcrypt (Kostenfaktor 12) gehasht.
+- **Ein Konto, nur Passwort:** Die Instanz ist für eine Person gedacht. Das Konto wird beim ersten Aufruf angelegt, und zwar nur mit dem Einrichtungscode aus dem Server-Log. Danach ist keine Registrierung mehr möglich. So kann auch bei einer öffentlich erreichbaren Instanz niemand anderes die Einrichtung übernehmen. Das Passwort wird mit bcrypt (Kostenfaktor 12) gehasht.
 - **JWT:** Das Access Token (HS256, 15 min) und das Refresh Token (zufällig, nur als SHA-256-Hash in der DB gespeichert, wird bei jeder Nutzung rotiert) liegen in `HttpOnly`- und `SameSite=Strict`-Cookies. JavaScript kann sie also nicht auslesen. Beim Logout und bei einer Passwortänderung werden die Tokens widerrufen.
 - **CSRF:** Neben `SameSite=Strict` müssen alle schreibenden Requests den Header `X-Requested-With: privat-cloud` mitschicken.
 - **Brute Force:** Login und Setup sind auf 10 Fehlversuche pro 15 Minuten und IP begrenzt.
@@ -71,7 +80,7 @@ Alle Einstellungen laufen über Umgebungsvariablen. Lokal kopierst du dafür `ba
 - **Uploads:** Größenlimit und Whitelist der Dateiendungen prüft der Server, nicht nur der Browser. Den MIME-Typ leitet der Server selbst aus der Endung ab. HTML und SVG sind nicht erlaubt.
 - **Auslieferung:** Downloads gehen als `attachment` mit `nosniff` raus. Inline-Vorschauen gibt es nur für Bilder, PDFs und Text (als `text/plain`), Bilder und Text zusätzlich unter einer CSP-Sandbox. Dazu kommen Security-Header über helmet.
 
-**Zugriff aus dem Internet:** Betreibe die App dann nur hinter einem Reverse Proxy mit HTTPS (z. B. Caddy) und setze `COOKIE_SECURE=true` und `TRUST_PROXY=1`. Ohne HTTPS gehen Passwort und Cookies im Klartext über die Leitung.
+**Zugriff aus dem Internet:** Betreibe die App nur mit HTTPS, siehe [docs/hosting.md](docs/hosting.md). Ohne HTTPS gehen Passwort und Cookies im Klartext über die Leitung.
 
 ## Backup
 
@@ -83,7 +92,7 @@ docker run --rm -v privat-cloud-data:/data -v "$PWD":/backup alpine tar czf /bac
 docker compose start
 ```
 
-**Passwort vergessen?** Stoppe die App und lösche in der Datenbank die Tabelle `users` bzw. ihren Inhalt (z. B. mit `sqlite3 privat-cloud.sqlite "DELETE FROM users;"`). Beim nächsten Aufruf richtest du dann ein neues Passwort ein. Die Dateien bleiben dabei erhalten.
+**Passwort vergessen?** Stoppe die App und lösche in der Datenbank den Inhalt der Tabelle `users` (z. B. mit `sqlite3 privat-cloud.sqlite "DELETE FROM users;"`). Nach dem Neustart gibt der Server einen neuen Einrichtungscode aus, mit dem du ein neues Passwort festlegst. Die Dateien bleiben dabei erhalten.
 
 ## Projektstruktur
 
@@ -106,8 +115,11 @@ privat-Cloud/
 │   │   ├── hooks.js    # Theme, Ordner-Routing über den URL-Hash
 │   │   └── components/ # AuthScreen, FileManager, Dialoge, Vorschau, Upload-Panel, Icons
 │   └── vite.config.js
+├── docs/
+│   └── hosting.md      # Öffentlich erreichbar machen (Cloudflare Tunnel, Tailscale Funnel)
 ├── Dockerfile
-├── docker-compose.yml
+├── docker-compose.yml  # optionales Profil "tunnel" für Cloudflare
+├── .env.example        # Konfiguration für Docker Compose
 └── package.json        # Skripte: dev, build, start
 ```
 
@@ -118,7 +130,8 @@ Mit Ausnahme von `/api/health`, `/api/auth/status|setup|login|refresh|logout` br
 | Methode | Pfad | Zweck |
 |---|---|---|
 | `GET` | `/api/auth/status` | `{ setupRequired, authenticated }` |
-| `POST` | `/api/auth/setup` · `/login` | `{ password }` → setzt die Cookies |
+| `POST` | `/api/auth/setup` | `{ password, setupCode }` → legt das Konto an, setzt die Cookies |
+| `POST` | `/api/auth/login` | `{ password }` → setzt die Cookies |
 | `POST` | `/api/auth/refresh` · `/logout` | Tokens erneuern bzw. widerrufen |
 | `POST` | `/api/auth/change-password` | `{ currentPassword, newPassword }` |
 | `GET` | `/api/browse?folderId=` | Inhalt eines Ordners mit Breadcrumbs |

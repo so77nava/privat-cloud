@@ -1,3 +1,8 @@
+# Konfiguration über eine .env-Datei neben dieser Datei (Vorlage: .env.example).
+#
+#   Nur lokal / im Heimnetz:     docker compose up -d --build
+#   Mit Cloudflare Tunnel:       docker compose --profile tunnel up -d --build
+
 services:
   privat-cloud:
     build: .
@@ -5,16 +10,29 @@ services:
     container_name: privat-cloud
     restart: unless-stopped
     ports:
-      - "3000:3000"
+      - "${PUBLISH_ADDRESS:-0.0.0.0}:${PUBLISH_PORT:-3000}:3000"
     environment:
-      # Optional – ohne JWT_SECRET wird eines erzeugt und im Volume gespeichert.
       JWT_SECRET: ${JWT_SECRET:-}
+      SETUP_CODE: ${SETUP_CODE:-}
       MAX_FILE_SIZE_MB: ${MAX_FILE_SIZE_MB:-100}
       ALLOWED_EXTENSIONS: ${ALLOWED_EXTENSIONS:-}
       COOKIE_SECURE: ${COOKIE_SECURE:-false}
       TRUST_PROXY: ${TRUST_PROXY:-0}
     volumes:
       - privat-cloud-data:/data
+
+  # Optional: macht die App über einen Cloudflare Tunnel öffentlich per HTTPS erreichbar,
+  # ohne Portfreigabe am Router. Anleitung: docs/hosting.md
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: privat-cloud-tunnel
+    profiles: ["tunnel"]
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:-}
+    depends_on:
+      - privat-cloud
 
 volumes:
   privat-cloud-data:
